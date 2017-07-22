@@ -1,0 +1,3 @@
+#    Configures how long display entities should be kept in-world before they are
+#    removed.
+advschem.display_remove (Remove Display Entities After) float 60
