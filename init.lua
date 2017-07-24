@@ -3,15 +3,24 @@
 advschem = {}
 
 local path       = minetest.get_worldpath().."/advschem.mt"
-local contexts   = {}
 local marked     = {}
 advschem.markers = {}
+
+-- [local function] Renumber table
+local function renumber(t)
+	local res = {}
+	for _, i in pairs(t) do
+		res[#res + 1] = i
+	end
+	return res
+end
 
 ---
 --- Formspec API
 ---
 
 local contexts = {}
+local form_data = {}
 local tabs = {}
 local forms = {}
 
@@ -61,7 +70,11 @@ function advschem.show_formspec(pos, player, tab, show, ...)
 		local name = player:get_player_name()
 
 		if show ~= false then
-			local form = forms[tab].get(pos, name, ...)
+			if not form_data[name] then
+				form_data[name] = {}
+			end
+
+			local form = forms[tab].get(form_data[name], pos, name, ...)
 			if forms[tab].tab then
 				form = form..advschem.generate_tabs(tab)
 			end
@@ -87,8 +100,12 @@ minetest.register_on_player_receive_fields(function(player, formname, fields)
 		local handle = forms[formname[2]].handle
 		local name = player:get_player_name()
 		if contexts[name] then
+			if not form_data[name] then
+				form_data[name] = {}
+			end
+
 			if not advschem.handle_tabs(contexts[name], name, fields) and handle then
-				handle(contexts[name], name, fields)
+				handle(form_data[name], contexts[name], name, fields)
 			end
 		end
 	end
@@ -101,7 +118,7 @@ end)
 advschem.add_form("main", {
 	tab = true,
 	caption = "Main",
-	get = function(pos, name)
+	get = function(self, pos, name)
 		local meta = minetest.get_meta(pos):to_table().fields
 		local strpos = minetest.pos_to_string(pos)
 
@@ -138,7 +155,7 @@ advschem.add_form("main", {
 		]]..
 		border_button
 	end,
-	handle = function(pos, name, fields)
+	handle = function(self, pos, name, fields)
 		local realmeta = minetest.get_meta(pos)
 		local meta = realmeta:to_table().fields
 		local strpos = minetest.pos_to_string(pos)
@@ -197,8 +214,17 @@ advschem.add_form("main", {
 				}
 			end
 
+			local slist = minetest.deserialize(meta.slices)
+			local slice_list = {}
+			for _, i in pairs(slist) do
+				slice_list[#slice_list + 1] = {
+					ypos = pos.y + i.ypos,
+					prob = i.prob,
+				}
+			end
+
 			local filepath = path..meta.schem_name..".mts"
-			local res = minetest.create_schematic(pos1, pos2, probability_list, filepath, {})
+			local res = minetest.create_schematic(pos1, pos2, probability_list, filepath, slice_list)
 
 			if res then
 				minetest.chat_send_player(name, minetest.colorize("#00ff00",
@@ -238,7 +264,7 @@ advschem.add_form("main", {
 advschem.add_form("prob", {
 	tab = true,
 	caption = "Probability",
-	get = function(pos, name)
+	get = function(self, pos, name)
 		local meta = minetest.get_meta(pos)
 		local inventory = meta:get_inventory()
 		local stack = inventory:get_stack("probability", 1)
@@ -270,7 +296,7 @@ advschem.add_form("prob", {
 			listring[current_player;main]
 		]]..probchange
 	end,
-	handle = function(pos, name, fields)
+	handle = function(self, pos, name, fields)
 		local meta = minetest.get_meta(pos)
 		local inventory = meta:get_inventory()
 		local stack = inventory:get_stack("probability", 1)
@@ -328,6 +354,125 @@ advschem.add_form("prob", {
 			-- Refresh formspec
 			if fields.rst then
 				advschem.show_formspec(pos, minetest.get_player_by_name(name), "prob")
+			end
+		end
+	end,
+})
+
+advschem.add_form("slice", {
+	caption = "Y-Slice",
+	tab = true,
+	get = function(self, pos, name, visible_panel)
+		local meta = minetest.get_meta(pos):to_table().fields
+
+		self.selected = self.selected or 1
+		local selected = tostring(self.selected)
+		local slice_list = minetest.deserialize(meta.slices)
+		local slices = ""
+		for _, i in pairs(slice_list) do
+			local insert = "Y = "..tostring(i.ypos).."; Probability = "..tostring(i.prob)
+			slices = slices..minetest.formspec_escape(insert)..","
+		end
+		slices = slices:sub(1, -2) -- Remove final comma
+
+		local form = [[
+			size[7,6]
+			table[0,0;6.8,4;slices;]]..slices..[[;]]..selected..[[]
+		]]
+
+		if self.panel_add or self.panel_edit then
+			local ypos_default, prob_default = "", ""
+			local done_button = "button[5,5.18;2,1;done_add;Done]"
+			if self.panel_edit then
+				done_button = "button[5,5.18;2,1;done_edit;Done]"
+				ypos_default = slice_list[self.selected].ypos
+				prob_default = slice_list[self.selected].prob
+			end
+
+			form = form..[[
+				field[0.3,5.5;2.5,1;ypos;Y-Position (max ]]..(meta.y_size - 1)..[[):;]]..ypos_default..[[]
+				field[2.8,5.5;2.5,1;prob;Probability (0-255):;]]..prob_default..[[]
+				field_close_on_enter[ypos;false]
+				field_close_on_enter[prob;false]
+			]]..done_button
+		end
+
+		if not self.panel_edit then
+			form = form.."button[0,4;2,1;add;+ Add Slice]"
+		end
+
+		if slices ~= "" and self.selected and not self.panel_add then
+			if not self.panel_edit then
+				form = form..[[
+					button[2,4;2,1;remove;- Remove Slice]
+					button[4,4;2,1;edit;+/- Edit Slice]
+				]]
+			else
+				form = form..[[
+					button[0,4;2,1;remove;- Remove Slice]
+					button[2,4;2,1;edit;+/- Edit Slice]
+				]]
+			end
+		end
+
+		return form
+	end,
+	handle = function(self, pos, name, fields)
+		local meta = minetest.get_meta(pos)
+		local player = minetest.get_player_by_name(name)
+
+		if fields.slices then
+			local slices = fields.slices:split(":")
+			self.selected = tonumber(slices[2])
+		end
+
+		if fields.add then
+			if not self.panel_add then
+				self.panel_add = true
+				advschem.show_formspec(pos, player, "slice")
+			else
+				self.panel_add = nil
+				advschem.show_formspec(pos, player, "slice")
+			end
+		end
+
+		local ypos, prob = tonumber(fields.ypos), tonumber(fields.prob)
+		if (fields.done_add or fields.done_edit) and fields.ypos and fields.prob and
+		fields.ypos ~= "" and fields.prob ~= "" and ypos and prob and
+				 ypos <= (meta:get_int("y_size") - 1) and prob >= 0 and prob <= 255 then
+			local slice_list = minetest.deserialize(meta:get_string("slices"))
+			local index = #slice_list + 1
+			if fields.done_edit then
+				index = self.selected
+			end
+
+			slice_list[index] = {ypos = ypos, prob = prob}
+
+			meta:set_string("slices", minetest.serialize(slice_list))
+
+			-- Update and show formspec
+			self.panel_add = nil
+			advschem.show_formspec(pos, player, "slice")
+		end
+
+		if fields.remove and self.selected then
+			local slice_list = minetest.deserialize(meta:get_string("slices"))
+			slice_list[self.selected] = nil
+			meta:set_string("slices", minetest.serialize(renumber(slice_list)))
+
+			-- Update formspec
+			self.selected = 1
+			self.panel_edit = nil
+			advschem.show_formspec(pos, player, "slice")
+		end
+
+		if fields.edit then
+			if not self.panel_edit then
+				self.panel_edit = true
+				advschem.show_formspec(pos, player, "slice")
+			else
+				self.panel_edit = nil
+				advschem.show_formspec(pos, player, "slice")
 			end
 		end
 	end,
@@ -530,9 +675,11 @@ minetest.register_on_dignode(function(pos, oldnode, player)
 			local meta = minetest.get_meta(realpos)
 			local prob_list = minetest.deserialize(meta:get_string("prob_list"))
 
-			for _, i in pairs(prob_list) do
-				if _ == original_strpos then
-					prob_list[_] = nil
+			if prob_list then
+				for _, i in pairs(prob_list) do
+					if _ == original_strpos then
+						prob_list[_] = nil
+					end
 				end
 			end
 
@@ -562,6 +709,7 @@ minetest.register_node("advschem:creator", {
 		meta:set_string("owner", name)
 		meta:set_string("infotext", "Schematic Creator\n(owned by "..name..")")
 		meta:set_string("prob_list", minetest.serialize({}))
+		meta:set_string("slices", minetest.serialize({}))
 
 		local node = minetest.get_node(pos)
 		local dir  = minetest.facedir_to_dir(node.param2)
