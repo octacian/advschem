@@ -208,9 +208,14 @@ advschem.add_form("main", {
 			local plist = minetest.deserialize(meta.prob_list)
 			local probability_list = {}
 			for _, i in pairs(plist) do
+				local prob = i.prob
+				if i.force_place == true then
+					prob = prob + 128
+				end
+
 				probability_list[#probability_list + 1] = {
 					pos = minetest.string_to_pos(_),
-					prob = i.prob,
+					prob = prob,
 				}
 			end
 
@@ -270,31 +275,34 @@ advschem.add_form("prob", {
 		local stack = inventory:get_stack("probability", 1)
 		local stringpos = pos.x..","..pos.y..","..pos.z
 
-		local probchange = ""
+		local form = [[
+			size[8,6]
+			list[nodemeta:]]..stringpos..[[;probability;0,0;1,1;]
+			label[0,1;Probability is a number between 0 and 127.]
+			list[current_player;main;0,1.5;8,4;]
+			listring[nodemeta:]]..stringpos..[[;probability]
+			listring[current_player;main]
+		]]
+
 		if stack:get_name() ~= "" then
 			local smeta = stack:get_meta():to_table().fields
 
-			probchange = [[
-				field[1.3,0.4;2,1;probability;Probability:;]]..(smeta.advschem_prob or "255")..[[]
+			form = form .. [[
+				field[1.3,0.4;2,1;probability;Probability:;]]..
+						(smeta.advschem_prob or "127").."]" ..
+			[[
 				field_close_on_enter[probability;false]
 				checkbox[3.1,0.1;force_place;Force Place;]]..(smeta.advschem_force_place or "false")..[[]
 				button[5,0.1;1.5,1;rst;Reset]
 				button[6.5,0.1;1.5,1;save;Save]
 			]]
 		else
-			probchange = [[
+			form = form .. [[
 				label[1,0.2;Insert item in slot.]
 			]]
 		end
 
-		return [[
-			size[8,6]
-			list[nodemeta:]]..stringpos..[[;probability;0,0;1,1;]
-			label[0,1;Probability is a number between 0 and 255.]
-			list[current_player;main;0,1.5;8,4;]
-			listring[nodemeta:]]..stringpos..[[;probability]
-			listring[current_player;main]
-		]]..probchange
+		return form
 	end,
 	handle = function(self, pos, name, fields)
 		local meta = minetest.get_meta(pos)
@@ -316,19 +324,27 @@ advschem.add_form("prob", {
 				smeta:set_string("description", original_desc)
 			elseif fields.force_place or fields.save or
 					fields.key_enter_field == "probability" then
+
+				local prob_desc = "\nProbability: "..(fields.probability or
+						smeta:get_string("advschem_prob") or "Not Set")
+				-- Update probability
 				if fields.probability ~= "" then
 					local prob = tonumber(fields.probability)
-					if prob and prob >= 0 and prob <= 255 then
+					if prob and prob >= 0 and prob <= 127 then
 						smeta:set_string("advschem_prob", fields.probability)
 					else
+						prob_desc = "\nProbability: "..(smeta:get_string("advschem_prob") or
+								"Not Set")
 						advschem.show_formspec(pos, minetest.get_player_by_name(name), "prob")
-						return
 					end
 				else
 					smeta:set_string("advschem_prob", nil)
 				end
 
-				smeta:set_string("advschem_force_place", fields.force_place)
+				-- Update force place if fields value is not nil
+				if fields.force_place ~= nil then
+					smeta:set_string("advschem_force_place", fields.force_place)
+				end
 
 				-- Update description
 				local desc = minetest.registered_items[stack:get_name()].description
@@ -344,16 +360,21 @@ advschem.add_form("prob", {
 					smeta:set_string("original_description", desc)
 				end
 
-				desc = desc.."\n"..minetest.colorize("grey", "Probability: "..
-					fields.probability.."\nForce Place: "..(fields.force_place or "false"))
+				local force_desc = ""
+				if smeta:get_string("advschem_force_place") == "true" then
+					force_desc = "\n".."Force Place"
+				end
+
+				desc = desc..minetest.colorize("grey", prob_desc..force_desc)
+
 				smeta:set_string("description", desc)
 			end
 
 			-- Update itemstack
 			inventory:set_stack("probability", 1, stack)
 
-			-- Refresh formspec
-			if fields.rst then
+			-- Refresh formspec on reset or force placement change
+			if fields.rst or fields.force_place then
 				advschem.show_formspec(pos, minetest.get_player_by_name(name), "prob")
 			end
 		end
