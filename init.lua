@@ -2,7 +2,9 @@
 
 advschem = {}
 
+local path       = minetest.get_worldpath().."/advschem.mt"
 local contexts   = {}
+local marked     = {}
 advschem.markers = {}
 
 ---
@@ -152,6 +154,7 @@ advschem.add_form("main", {
 			end
 		end
 
+		local update_positions = false
 		-- Save size vector values
 		if (fields.save or fields.key_enter_field == "x" or
 				fields.key_enter_field == "y" or fields.key_enter_field == "z")
@@ -168,6 +171,9 @@ advschem.add_form("main", {
 			if z then
 				meta.z_size = math.max(z, 1)
 			end
+
+			-- Set positions to be updated
+			update_positions = true
 		end
 
 		-- Save schematic name
@@ -182,8 +188,17 @@ advschem.add_form("main", {
 			local path = minetest.get_worldpath().."/schems/"
 			minetest.mkdir(path)
 
+			local plist = minetest.deserialize(meta.prob_list)
+			local probability_list = {}
+			for _, i in pairs(plist) do
+				probability_list[#probability_list + 1] = {
+					pos = minetest.string_to_pos(_),
+					prob = i.prob,
+				}
+			end
+
 			local filepath = path..meta.schem_name..".mts"
-			local res = minetest.create_schematic(pos1, pos2, {}, filepath, {})
+			local res = minetest.create_schematic(pos1, pos2, probability_list, filepath, {})
 
 			if res then
 				minetest.chat_send_player(name, minetest.colorize("#00ff00",
@@ -195,7 +210,8 @@ advschem.add_form("main", {
 		end
 
 		-- Save meta before updating visuals
-		realmeta:from_table({fields = meta})
+		local inv = realmeta:get_inventory():get_lists()
+		realmeta:from_table({fields = meta, inventory = inv})
 
 		-- Update border
 		if not fields.border and meta.schem_border == "true" then
@@ -206,12 +222,142 @@ advschem.add_form("main", {
 		if not fields.quit then
 			advschem.show_formspec(pos, minetest.get_player_by_name(name), "main")
 		end
+
+		-- Update pos1 and pos2 in marked table (for interaction checking)
+		if update_positions then
+			local pos1, pos2 = advschem.size(pos)
+			pos1, pos2 = advschem.sort_pos(pos1, pos2)
+			marked[minetest.pos_to_string(pos)] = {
+				pos1 = pos1,
+				pos2 = pos2,
+			}
+		end
+	end,
+})
+
+advschem.add_form("prob", {
+	tab = true,
+	caption = "Probability",
+	get = function(pos, name)
+		local meta = minetest.get_meta(pos)
+		local inventory = meta:get_inventory()
+		local stack = inventory:get_stack("probability", 1)
+		local stringpos = pos.x..","..pos.y..","..pos.z
+
+		local probchange = ""
+		if stack:get_name() ~= "" then
+			local smeta = stack:get_meta():to_table().fields
+
+			probchange = [[
+				field[1.3,0.4;2,1;probability;Probability:;]]..(smeta.advschem_prob or "255")..[[]
+				field_close_on_enter[probability;false]
+				checkbox[3.1,0.1;force_place;Force Place;]]..(smeta.advschem_force_place or "false")..[[]
+				button[5,0.1;1.5,1;rst;Reset]
+				button[6.5,0.1;1.5,1;save;Save]
+			]]
+		else
+			probchange = [[
+				label[1,0.2;Insert item in slot.]
+			]]
+		end
+
+		return [[
+			size[8,6]
+			list[nodemeta:]]..stringpos..[[;probability;0,0;1,1;]
+			label[0,1;Probability is a number between 0 and 255.]
+			list[current_player;main;0,1.5;8,4;]
+			listring[nodemeta:]]..stringpos..[[;probability]
+			listring[current_player;main]
+		]]..probchange
+	end,
+	handle = function(pos, name, fields)
+		local meta = minetest.get_meta(pos)
+		local inventory = meta:get_inventory()
+		local stack = inventory:get_stack("probability", 1)
+		local smeta = stack:get_meta()
+
+		if stack:get_name() ~= "" then
+			if fields.rst then
+				smeta:set_string("advschem_prob", nil)
+				smeta:set_string("advschem_force_place", nil)
+
+				-- Reset description
+				local original_desc = smeta:get_string("original_desc")
+				if not original_desc or original_desc == "" then
+					original_desc = minetest.registered_items[stack:get_name()].description
+				end
+
+				smeta:set_string("description", original_desc)
+			elseif fields.force_place or fields.save or
+					fields.key_enter_field == "probability" then
+				if fields.probability ~= "" then
+					local prob = tonumber(fields.probability)
+					if prob >= 0 and prob <= 255 then
+						smeta:set_string("advschem_prob", fields.probability)
+					else
+						advschem.show_formspec(pos, minetest.get_player_by_name(name), "prob")
+					end
+				else
+					smeta:set_string("advschem_prob", nil)
+				end
+
+				smeta:set_string("advschem_force_place", fields.force_place)
+
+				-- Update description
+				local desc = minetest.registered_items[stack:get_name()].description
+				local meta_desc = smeta:get_string("description")
+				if meta_desc and meta_desc ~= "" then
+					desc = meta_desc
+				end
+
+				local original_desc = smeta:get_string("original_description")
+				if original_desc and original_desc ~= "" then
+					desc = original_desc
+				else
+					smeta:set_string("original_description", desc)
+				end
+
+				desc = desc.."\n"..minetest.colorize("grey", "Probability: "..
+					fields.probability.."\nForce Place: "..(fields.force_place or "false"))
+				smeta:set_string("description", desc)
+			end
+
+			-- Update itemstack
+			inventory:set_stack("probability", 1, stack)
+
+			-- Refresh formspec
+			if fields.rst then
+				advschem.show_formspec(pos, minetest.get_player_by_name(name), "prob")
+			end
+		end
 	end,
 })
 
 ---
 --- API
 ---
+
+-- [function] Load
+function advschem.load()
+	local res = io.open(path, "r")
+	if res then
+		marked = minetest.deserialize(res:read("*a"))
+		res:close()
+	end
+
+	if type(marked) ~= "table" then
+		marked = {}
+	end
+end
+
+-- [function] Save
+function advschem.save()
+	local res = io.open(path, "w")
+	if res then
+		res:write(minetest.serialize(marked))
+		res:close()
+	end
+end
 
 --- Copies and modifies positions `pos1` and `pos2` so that each component of
 -- `pos1` is less than or equal to the corresponding component of `pos2`.
@@ -332,15 +478,65 @@ end
 --- Registrations
 ---
 
--- [register] On receive fields
-minetest.register_on_player_receive_fields(function(player, formname, fields)
-	formname = formname:split(":")
-	if formname and formname[1] == "advschem" then
-		local name    = player:get_player_name()
-		local fname   = formname[2]
-		local context = contexts[name]
-		if forms[fname] and context and context.name == fname then
-			forms[fname].handle(name, fields, context.pos)
+-- [event] Save data on shut down
+minetest.register_on_shutdown(advschem.save)
+
+-- [event] Transfer probabilities and force place on place node
+minetest.register_on_placenode(function(pos, newnode, player, oldnode, itemstack)
+	local smeta = itemstack:get_meta():to_table().fields
+
+	if smeta.advschem_prob and tonumber(smeta.advschem_prob) then
+		local px, py, pz = pos.x, pos.y, pos.z
+		for strpos, r in pairs(marked) do
+			local ap1, ap2 = r.pos1, r.pos2
+			if (px >= ap1.x and px <= ap2.x) and
+					(py >= ap1.y and py <= ap2.y) and
+					(pz >= ap1.z and pz <= ap2.z) then
+				local realpos = minetest.string_to_pos(strpos)
+				local node = minetest.get_node_or_nil(realpos)
+
+				if node and node.name == "advschem:creator" then
+					local meta = minetest.get_meta(realpos)
+					local prob_list = minetest.deserialize(meta:get_string("prob_list"))
+
+					local force_place = false
+					if smeta.advschem_force_place == "true" then
+						force_place = true
+					end
+
+					local ostrpos = minetest.pos_to_string(pos)
+					prob_list[ostrpos] = {
+						pos = pos,
+						prob = tonumber(smeta.advschem_prob),
+						force_place = force_place,
+					}
+					meta:set_string("prob_list", minetest.serialize(prob_list))
+				end
+			end
+		end
+	end
+end)
+
+-- [event] Remove probability on break node
+minetest.register_on_dignode(function(pos, oldnode, player)
+	local original_strpos = minetest.pos_to_string(pos)
+	local px, py, pz = pos.x, pos.y, pos.z
+	for strpos, r in pairs(marked) do
+		local ap1, ap2 = r.pos1, r.pos2
+		if (px >= ap1.x and px <= ap2.x) and
+				(py >= ap1.y and py <= ap2.y) and
+				(pz >= ap1.z and pz <= ap2.z) then
+			local realpos = minetest.string_to_pos(strpos)
+			local meta = minetest.get_meta(realpos)
+			local prob_list = minetest.deserialize(meta:get_string("prob_list"))
+
+			for _, i in pairs(prob_list) do
+				if _ == original_strpos then
+					prob_list[_] = nil
+				end
+			end
+
+			meta:set_string("prob_list", minetest.serialize(prob_list))
 		end
 	end
 end)
@@ -365,6 +561,7 @@ minetest.register_node("advschem:creator", {
 
 		meta:set_string("owner", name)
 		meta:set_string("infotext", "Schematic Creator\n(owned by "..name..")")
+		meta:set_string("prob_list", minetest.serialize({}))
 
 		local node = minetest.get_node(pos)
 		local dir  = minetest.facedir_to_dir(node.param2)
@@ -372,6 +569,15 @@ minetest.register_node("advschem:creator", {
 		meta:set_int("x_size", 1)
 		meta:set_int("y_size", 1)
 		meta:set_int("z_size", 1)
+
+		local inv = meta:get_inventory()
+		inv:set_size("probability", 1)
+
+		local pos1, pos2 = advschem.size(pos)
+		marked[minetest.pos_to_string(pos)] = {
+			pos1 = pos1,
+			pos2 = pos2,
+		}
 
 		-- Don't take item from itemstack
 		return true
@@ -402,6 +608,18 @@ minetest.register_node("advschem:creator", {
 	end,
 	after_destruct = function(pos)
 		advschem.unmark(pos)
+	end,
+
+	-- Update formspec when items are added to or taken from the probability inventory
+	on_metadata_inventory_put = function(pos, listname, index, stack, player)
+		if listname == "probability" then
+			advschem.show_formspec(pos, player, "prob", true)
+		end
+	end,
+	on_metadata_inventory_take = function(pos, listname, index, stack, player)
+		if listname == "probability" then
+			advschem.show_formspec(pos, player, "prob", true)
+		end
 	end,
 })
 
@@ -434,3 +652,9 @@ minetest.register_entity("advschem:display", {
 		self.object:set_armor_groups({immortal = 1})
 	end,
 })
+
+---
+--- Load Data
+---
+
+advschem.load()
