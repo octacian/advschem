@@ -318,10 +318,11 @@ advschem.add_form("prob", {
 					fields.key_enter_field == "probability" then
 				if fields.probability ~= "" then
 					local prob = tonumber(fields.probability)
-					if prob >= 0 and prob <= 255 then
+					if prob and prob >= 0 and prob <= 255 then
 						smeta:set_string("advschem_prob", fields.probability)
 					else
 						advschem.show_formspec(pos, minetest.get_player_by_name(name), "prob")
+						return
 					end
 				else
 					smeta:set_string("advschem_prob", nil)
