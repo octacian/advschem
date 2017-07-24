@@ -653,6 +653,25 @@ minetest.register_entity("advschem:display", {
 	end,
 })
 
+-- [chatcommand] Place schematic
+minetest.register_chatcommand("placeschem", {
+	description = "Place schematic at the position specified or the current "..
+			"player position (loaded from "..minetest.get_worldpath().."/schems/)",
+	privs = {debug = true},
+	params = "[<schematic name>.mts] (<x> <y> <z>)",
+	func = function(name, param)
+		local schem, p = string.match(param, "^([^ ]+) *(.*)$")
+		local pos      = minetest.string_to_pos(p)
+
+		if not pos then
+			pos = minetest.get_player_by_name(name):get_pos()
+		end
+
+		return true, "Success: "..dump(minetest.place_schematic(pos,
+				minetest.get_worldpath().."/schems/"..schem..".mts", "random", nil, false))
+	end,
+})
+
 ---
 --- Load Data
 ---
